@@ -27,6 +27,7 @@
     "node-tls-client": "^2.1.0",
     "path": "^0.12.7",
     "socket.io-client": "^4.8.3",
+    "undici": "^7.29.0",
     "ws": "^8.18.3"
   },
   "type": "module"

@@ -1,551 +1,383 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import http from "node:http";
+import https from "node:https";
+import { URL } from "node:url";
 
-// =====================================================
-// PATHS
-// =====================================================
+const PORT = 4060;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const SOURCE = "https://edge.novastream.et/liveplay/kynlMlVdlEvsqvbzYjXffYS2kYoO14ZOLPEz0eY-MrA/1787773231/3600/d0019c9d-5088-47a2-bb9a-ec5fff5b9b4a/etvn.m3u8";
 
-const CONFIG_FILE = path.join(__dirname, "stream-config.json");
-const OUTPUT_DIR = path.join(__dirname, "outputs");
+const server = http.createServer(async (req, res) => {
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "*");
 
-// =====================================================
-// LOAD CONFIG
-// =====================================================
-
-if (!fs.existsSync(CONFIG_FILE)) {
-  console.error("ERROR: stream-config.json not found");
-  process.exit(1);
-}
-
-let config;
-
-try {
-  config = JSON.parse(
-    fs.readFileSync(CONFIG_FILE, "utf8")
-  );
-} catch (error) {
-  console.error("ERROR: Invalid stream-config.json");
-  console.error(error.message);
-  process.exit(1);
-}
-
-// =====================================================
-// VALIDATION
-// =====================================================
-
-const requiredSources = [
-  "360p",
-  "720p",
-  "audio"
-];
-
-for (const source of requiredSources) {
-  if (
-    typeof config.sources?.[source] !== "string" ||
-    !config.sources[source]
-  ) {
-    console.error(
-      `ERROR: sources.${source} is missing`
-    );
-
-    process.exit(1);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    return res.end();
   }
-}
 
-if (
-  !config.headers ||
-  typeof config.headers.origin !== "string" ||
-  typeof config.headers.referer !== "string"
-) {
-  console.error(
-    "ERROR: headers.origin or headers.referer is missing"
-  );
-
-  process.exit(1);
-}
-
-if (
-  typeof config.cookie !== "string" ||
-  !config.cookie
-) {
-  console.error(
-    "ERROR: cookie is missing"
-  );
-
-  process.exit(1);
-}
-
-// =====================================================
-// SETTINGS
-// =====================================================
-
-const PORT = Number(config.port || 4060);
-
-const FFMPEG =
-  config.ffmpegPath || "/usr/bin/ffmpeg";
-
-const SOURCES = config.sources;
-
-// =====================================================
-// OUTPUT DIRECTORIES
-// =====================================================
-
-fs.mkdirSync(
-  OUTPUT_DIR,
-  {
-    recursive: true
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405);
+    return res.end("Method Not Allowed");
   }
-);
 
-for (const quality of ["360p", "720p"]) {
+  const requestUrl = new URL(
+    req.url,
+    `http://${req.headers.host}`
+  );
 
-  fs.mkdirSync(
-    path.join(
-      OUTPUT_DIR,
-      quality
-    ),
-    {
-      recursive: true
+  // --------------------------------------------------
+  // Master / media playlist
+  // --------------------------------------------------
+
+  if (requestUrl.pathname === "/index.m3u8") {
+    try {
+      const playlist = await fetchText(SOURCE);
+
+      const sourceUrl = new URL(SOURCE);
+
+      const rewritten = playlist
+        .split("\n")
+        .map((line) => {
+          const trimmed = line.trim();
+
+          // Keep comments/directives unchanged
+          if (!trimmed || trimmed.startsWith("#")) {
+            return line;
+          }
+
+          // Convert relative/absolute HLS URLs
+          const absolute = new URL(trimmed, sourceUrl);
+
+          return `/proxy?url=${encodeURIComponent(absolute.href)}`;
+        })
+        .join("\n");
+
+      res.writeHead(200, {
+        "Content-Type": "application/vnd.apple.mpegurl",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+      });
+
+      if (req.method === "HEAD") {
+        return res.end();
+      }
+
+      return res.end(rewritten);
+    } catch (error) {
+      console.error("Playlist error:", error);
+
+      res.writeHead(502);
+      return res.end("Unable to fetch source playlist");
     }
-  );
-}
-
-// =====================================================
-// CLEAN OLD HLS FILES
-// =====================================================
-
-function cleanDirectory(directory) {
-
-  if (!fs.existsSync(directory)) {
-    return;
   }
 
-  for (const file of fs.readdirSync(directory)) {
+  // --------------------------------------------------
+  // HLS segment / nested playlist proxy
+  // --------------------------------------------------
+
+  if (requestUrl.pathname === "/proxy") {
+    const target = requestUrl.searchParams.get("url");
+
+    if (!target) {
+      res.writeHead(400);
+      return res.end("Missing url");
+    }
+
+    let targetUrl;
 
     try {
-
-      fs.unlinkSync(
-        path.join(
-          directory,
-          file
-        )
-      );
-
+      targetUrl = new URL(target);
     } catch {
-      // Ignore
+      res.writeHead(400);
+      return res.end("Invalid URL");
+    }
+
+    // Only allow HTTPS sources
+    if (targetUrl.protocol !== "https:") {
+      res.writeHead(400);
+      return res.end("Only HTTPS sources are allowed");
+    }
+
+    try {
+      return proxyRequest(targetUrl, req, res);
+    } catch (error) {
+      console.error("Proxy error:", error);
+
+      if (!res.headersSent) {
+        res.writeHead(502);
+      }
+
+      res.end("Proxy error");
     }
   }
-}
 
-cleanDirectory(
-  path.join(
-    OUTPUT_DIR,
-    "360p"
-  )
-);
-
-cleanDirectory(
-  path.join(
-    OUTPUT_DIR,
-    "720p"
-  )
-);
-
-try {
-
-  const master =
-    path.join(
-      OUTPUT_DIR,
-      "teststream.m3u8"
-    );
-
-  if (fs.existsSync(master)) {
-    fs.unlinkSync(master);
-  }
-
-} catch {
-  // Ignore
-}
-
-// =====================================================
-// SOURCE HTTP HEADERS
-// =====================================================
-
-const HTTP_HEADERS =
-  `Origin: ${config.headers.origin}\r\n` +
-  `Referer: ${config.headers.referer}\r\n` +
-  `Cookie: ${config.cookie}\r\n`;
-
-// =====================================================
-// FFMPEG ARGUMENTS
-// =====================================================
-//
-// Only 3 upstream connections:
-//
-// 360p
-// 720p
-// audio
-//
-// Video is copied without re-encoding.
-// This keeps CPU usage low.
-// =====================================================
-
-const ffmpegArgs = [
-
-  // ===================================================
-  // 360P
-  // ===================================================
-
-  "-headers",
-  HTTP_HEADERS,
-
-  "-i",
-  SOURCES["360p"],
-
-  // ===================================================
-  // 720P
-  // ===================================================
-
-  "-headers",
-  HTTP_HEADERS,
-
-  "-i",
-  SOURCES["720p"],
-
-  // ===================================================
-  // AUDIO
-  // ===================================================
-
-  "-headers",
-  HTTP_HEADERS,
-
-  "-i",
-  SOURCES["audio"],
-
-  // ===================================================
-  // MAP 360P
-  // ===================================================
-
-  "-map",
-  "0:v:0",
-
-  "-map",
-  "2:a:0",
-
-  // ===================================================
-  // MAP 720P
-  // ===================================================
-
-  "-map",
-  "1:v:0",
-
-  "-map",
-  "2:a:0",
-
-  // ===================================================
-  // VIDEO
-  // ===================================================
-
-  "-c:v",
-  "copy",
-
-  // ===================================================
-  // AUDIO
-  // ===================================================
-
-  "-c:a",
-  "aac",
-
-  "-b:a",
-  "128k",
-
-  "-ar",
-  "48000",
-
-  // ===================================================
-  // HLS
-  // ===================================================
-
-  "-f",
-  "hls",
-
-  "-hls_segment_type",
-  "fmp4",
-
-  // 2 second segments reduce latency.
-  "-hls_time",
-  "2",
-
-  // Keep 6 segments.
-  // ~12 seconds of playlist.
-  "-hls_list_size",
-  "6",
-
-  // Keep a couple of old segments around.
-  // This helps slower clients avoid 404s.
-  "-hls_delete_threshold",
-  "2",
-
-  "-hls_flags",
-  "delete_segments+append_list+independent_segments",
-
-  // ===================================================
-  // MASTER PLAYLIST
-  // ===================================================
-
-  "-master_pl_name",
-  "teststream.m3u8",
-
-  // ===================================================
-  // VARIANT STREAMS
-  // ===================================================
-
-  "-var_stream_map",
-  "v:0,a:0,name:360p " +
-  "v:1,a:1,name:720p",
-
-  // ===================================================
-  // FMP4 INIT FILES
-  // ===================================================
-
-  "-hls_fmp4_init_filename",
-  "init.mp4",
-
-  // ===================================================
-  // SEGMENT FILES
-  // ===================================================
-
-  "-hls_segment_filename",
-  path.join(
-    OUTPUT_DIR,
-    "%v",
-    "segment-%06d.m4s"
-  ),
-
-  // ===================================================
-  // VARIANT PLAYLISTS
-  // ===================================================
-
-  path.join(
-    OUTPUT_DIR,
-    "%v",
-    "index.m3u8"
-  )
-];
-
-// =====================================================
-// LOG
-// =====================================================
-
-console.log("");
-console.log("========================================");
-console.log("       HLS RESTREAM - PRODUCTION");
-console.log("========================================");
-console.log("");
-
-console.log(
-  `FFmpeg: ${FFMPEG}`
-);
-
-console.log(
-  "360p  -> source 360p"
-);
-
-console.log(
-  "720p  -> source 720p"
-);
-
-console.log(
-  "Audio -> shared audio source"
-);
-
-console.log("");
-
-console.log(
-  "Video: COPY (no transcoding)"
-);
-
-console.log(
-  "HLS: 2 second segments"
-);
-
-console.log(
-  "Playlist: 6 segments"
-);
-
-console.log("");
-
-console.log(
-  `Master: http://127.0.0.1:${PORT}/teststream.m3u8`
-);
-
-console.log("");
-
-// =====================================================
-// START FFMPEG
-// =====================================================
-
-let ffmpeg;
-
-try {
-
-  ffmpeg = spawn(
-    FFMPEG,
-    ffmpegArgs,
-    {
-      stdio: [
-        "ignore",
-        "ignore",
-        "pipe"
-      ]
-    }
-  );
-
-} catch (error) {
-
-  console.error(
-    "Failed to start FFmpeg:"
-  );
-
-  console.error(error);
-
-  process.exit(1);
-}
-
-// =====================================================
-// FFMPEG STDERR
-// =====================================================
-
-ffmpeg.stderr.on(
-  "data",
-  (data) => {
-
-    process.stderr.write(
-      data.toString()
-    );
-  }
-);
-
-// =====================================================
-// FFMPEG ERROR
-// =====================================================
-
-ffmpeg.on(
-  "error",
-  (error) => {
-
-    console.error("");
-    console.error(
-      "========================================"
-    );
-    console.error(
-      "FFMPEG ERROR"
-    );
-    console.error(
-      "========================================"
-    );
-
-    console.error(
-      error
-    );
-
-  }
-);
-
-// =====================================================
-// FFMPEG EXIT
-// =====================================================
-
-ffmpeg.on(
-  "close",
-  (code, signal) => {
-
-    console.log("");
-
-    console.log(
-      "========================================"
-    );
-
-    console.log(
-      `FFmpeg exited. code=${code}, signal=${signal}`
-    );
-
-    console.log(
-      "========================================"
-    );
-
-  }
-);
-
-// =====================================================
-// SHUTDOWN
-// =====================================================
-
-let shuttingDown = false;
-
-function shutdown(signal) {
-
-  if (shuttingDown) {
-    return;
-  }
-
-  shuttingDown = true;
-
-  console.log("");
-  console.log(
-    `Received ${signal}`
-  );
-
-  console.log(
-    "Stopping FFmpeg..."
-  );
-
-  if (
-    ffmpeg &&
-    !ffmpeg.killed
-  ) {
-
-    ffmpeg.kill(
-      "SIGTERM"
-    );
-
-    setTimeout(
-      () => {
-
+  // --------------------------------------------------
+  // 404
+  // --------------------------------------------------
+
+  res.writeHead(404);
+  res.end("Not found");
+});
+
+
+// ==================================================
+// FETCH TEXT
+// ==================================================
+
+function fetchText(url) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith("https:")
+      ? https
+      : http;
+
+    const request = client.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "*/*",
+        },
+      },
+      (response) => {
         if (
-          ffmpeg &&
-          !ffmpeg.killed
+          response.statusCode < 200 ||
+          response.statusCode >= 300
         ) {
+          response.resume();
 
-          ffmpeg.kill(
-            "SIGKILL"
+          return reject(
+            new Error(
+              `Source returned HTTP ${response.statusCode}`
+            )
           );
         }
 
-      },
-      5000
-    );
-  }
+        let body = "";
 
-  setTimeout(
-    () => {
-      process.exit(0);
-    },
-    6000
-  );
+        response.setEncoding("utf8");
+
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+
+        response.on("end", () => {
+          resolve(body);
+        });
+      }
+    );
+
+    request.setTimeout(10000, () => {
+      request.destroy(
+        new Error("Source request timeout")
+      );
+    });
+
+    request.on("error", reject);
+  });
 }
 
-process.on(
-  "SIGINT",
-  () => shutdown("SIGINT")
+
+// ==================================================
+// STREAM PROXY
+// ==================================================
+
+function proxyRequest(targetUrl, req, res) {
+  return new Promise((resolve, reject) => {
+    const client = targetUrl.protocol === "https:"
+      ? https
+      : http;
+
+    const proxy = client.get(
+      targetUrl,
+      {
+        headers: {
+          "User-Agent":
+            req.headers["user-agent"] ||
+            "Mozilla/5.0",
+
+          "Accept":
+            req.headers.accept ||
+            "*/*",
+
+          "Referer":
+            req.headers.referer ||
+            "",
+
+          "Origin":
+            req.headers.origin ||
+            "",
+        },
+      },
+      (response) => {
+
+        if (
+          response.statusCode < 200 ||
+          response.statusCode >= 300
+        ) {
+          response.resume();
+
+          if (!res.headersSent) {
+            res.writeHead(
+              response.statusCode || 502
+            );
+          }
+
+          res.end();
+
+          return resolve();
+        }
+
+        // Detect playlist
+        const contentType =
+          response.headers["content-type"] || "";
+
+        const isPlaylist =
+          targetUrl.pathname.endsWith(".m3u8") ||
+          contentType.includes(
+            "application/vnd.apple.mpegurl"
+          ) ||
+          contentType.includes(
+            "application/x-mpegURL"
+          );
+
+        // ------------------------------------------------
+        // Nested playlist
+        // ------------------------------------------------
+
+        if (isPlaylist) {
+          let body = "";
+
+          response.setEncoding("utf8");
+
+          response.on("data", (chunk) => {
+            body += chunk;
+          });
+
+          response.on("end", () => {
+            const rewritten = body
+              .split("\n")
+              .map((line) => {
+                const trimmed = line.trim();
+
+                if (
+                  !trimmed ||
+                  trimmed.startsWith("#")
+                ) {
+                  return line;
+                }
+
+                const absolute =
+                  new URL(
+                    trimmed,
+                    targetUrl
+                  );
+
+                return `/proxy?url=${encodeURIComponent(
+                  absolute.href
+                )}`;
+              })
+              .join("\n");
+
+            res.writeHead(200, {
+              "Content-Type":
+                "application/vnd.apple.mpegurl",
+
+              "Cache-Control":
+                "no-cache, no-store, must-revalidate",
+            });
+
+            if (req.method === "HEAD") {
+              return res.end();
+            }
+
+            res.end(rewritten);
+            resolve();
+          });
+
+          return;
+        }
+
+        // ------------------------------------------------
+        // Video/audio segment
+        // ------------------------------------------------
+
+        const headers = {
+          "Content-Type":
+            contentType ||
+            "application/octet-stream",
+
+          "Cache-Control":
+            "public, max-age=3600, immutable",
+        };
+
+        if (response.headers["content-length"]) {
+          headers["Content-Length"] =
+            response.headers["content-length"];
+        }
+
+        res.writeHead(
+          response.statusCode,
+          headers
+        );
+
+        if (req.method === "HEAD") {
+          response.resume();
+          res.end();
+          return resolve();
+        }
+
+        response.pipe(res);
+
+        response.on("end", resolve);
+      }
+    );
+
+    proxy.setTimeout(15000, () => {
+      proxy.destroy(
+        new Error("Upstream timeout")
+      );
+    });
+
+    proxy.on("error", reject);
+
+    req.on("close", () => {
+      if (!res.writableEnded) {
+        proxy.destroy();
+      }
+    });
+  });
+}
+
+
+// ==================================================
+// START
+// ==================================================
+
+server.listen(
+  PORT,
+  "127.0.0.1",
+  () => {
+    console.log(
+      `HLS proxy running on http://127.0.0.1:${PORT}`
+    );
+
+    console.log(
+      `Playlist: http://127.0.0.1:${PORT}/index.m3u8`
+    );
+  }
 );
 
-process.on(
-  "SIGTERM",
-  () => shutdown("SIGTERM")
-);
+
+// ==================================================
+// SHUTDOWN
+// ==================================================
+
+function shutdown() {
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
