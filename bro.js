@@ -966,7 +966,7 @@ server.on(
 
 server.listen(
   PORT,
-  "0.0.0.0",
+  "127.0.0.1",
   () => {
 
     console.log(
