@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import http from "node:http";
 import { fileURLToPath } from "node:url";
 
 // =====================================================
@@ -19,7 +18,7 @@ const OUTPUT_DIR = path.join(__dirname, "outputs");
 // =====================================================
 
 if (!fs.existsSync(CONFIG_FILE)) {
-  console.error("CONFIG ERROR: stream-config.json not found");
+  console.error("ERROR: stream-config.json not found");
   process.exit(1);
 }
 
@@ -30,49 +29,32 @@ try {
     fs.readFileSync(CONFIG_FILE, "utf8")
   );
 } catch (error) {
-  console.error("CONFIG ERROR: invalid JSON");
+  console.error("ERROR: Invalid stream-config.json");
   console.error(error.message);
   process.exit(1);
 }
 
 // =====================================================
-// VALIDATE CONFIG
+// VALIDATION
 // =====================================================
 
-if (!config.sources) {
-  console.error("CONFIG ERROR: sources object is missing");
-  process.exit(1);
-}
-
-const requiredQualities = [
-  "240p",
+const requiredSources = [
   "360p",
   "720p",
-  "1080p",
+  "audio"
 ];
 
-for (const quality of requiredQualities) {
+for (const source of requiredSources) {
   if (
-    typeof config.sources[quality] !== "string" ||
-    !config.sources[quality]
+    typeof config.sources?.[source] !== "string" ||
+    !config.sources[source]
   ) {
     console.error(
-      `CONFIG ERROR: ${quality} source is missing`
+      `ERROR: sources.${source} is missing`
     );
 
     process.exit(1);
   }
-}
-
-if (
-  typeof config.sources.audio !== "string" ||
-  !config.sources.audio
-) {
-  console.error(
-    "CONFIG ERROR: sources.audio is missing"
-  );
-
-  process.exit(1);
 }
 
 if (
@@ -81,7 +63,7 @@ if (
   typeof config.headers.referer !== "string"
 ) {
   console.error(
-    "CONFIG ERROR: headers.origin or headers.referer is missing"
+    "ERROR: headers.origin or headers.referer is missing"
   );
 
   process.exit(1);
@@ -92,7 +74,7 @@ if (
   !config.cookie
 ) {
   console.error(
-    "CONFIG ERROR: cookie is missing"
+    "ERROR: cookie is missing"
   );
 
   process.exit(1);
@@ -102,82 +84,96 @@ if (
 // SETTINGS
 // =====================================================
 
-const PORT = Number(config.port || 3000);
+const PORT = Number(config.port || 4060);
 
 const FFMPEG =
-  config.ffmpegPath || "ffmpeg";
+  config.ffmpegPath || "/usr/bin/ffmpeg";
 
 const SOURCES = config.sources;
 
-const OUTPUT_ROOT = OUTPUT_DIR;
-
 // =====================================================
-// CREATE OUTPUT DIRECTORIES
+// OUTPUT DIRECTORIES
 // =====================================================
 
 fs.mkdirSync(
-  OUTPUT_ROOT,
+  OUTPUT_DIR,
   {
-    recursive: true,
+    recursive: true
   }
 );
 
-for (const quality of requiredQualities) {
-  const dir = path.join(
-    OUTPUT_ROOT,
-    quality
-  );
+for (const quality of ["360p", "720p"]) {
 
-  fs.mkdirSync(dir, {
-    recursive: true,
-  });
+  fs.mkdirSync(
+    path.join(
+      OUTPUT_DIR,
+      quality
+    ),
+    {
+      recursive: true
+    }
+  );
 }
 
 // =====================================================
 // CLEAN OLD HLS FILES
 // =====================================================
 
-function cleanOutputDirectory() {
-  for (const quality of requiredQualities) {
-    const dir = path.join(
-      OUTPUT_ROOT,
-      quality
-    );
+function cleanDirectory(directory) {
 
-    if (!fs.existsSync(dir)) {
-      continue;
-    }
-
-    for (const file of fs.readdirSync(dir)) {
-      try {
-        fs.unlinkSync(
-          path.join(dir, file)
-        );
-      } catch {
-        // Ignore files that cannot be removed.
-      }
-    }
+  if (!fs.existsSync(directory)) {
+    return;
   }
 
-  const master =
-    path.join(
-      OUTPUT_ROOT,
-      "teststream.m3u8"
-    );
+  for (const file of fs.readdirSync(directory)) {
 
-  try {
-    if (fs.existsSync(master)) {
-      fs.unlinkSync(master);
+    try {
+
+      fs.unlinkSync(
+        path.join(
+          directory,
+          file
+        )
+      );
+
+    } catch {
+      // Ignore
     }
-  } catch {
-    // Ignore
   }
 }
 
-cleanOutputDirectory();
+cleanDirectory(
+  path.join(
+    OUTPUT_DIR,
+    "360p"
+  )
+);
+
+cleanDirectory(
+  path.join(
+    OUTPUT_DIR,
+    "720p"
+  )
+);
+
+try {
+
+  const master =
+    path.join(
+      OUTPUT_DIR,
+      "teststream.m3u8"
+    );
+
+  if (fs.existsSync(master)) {
+    fs.unlinkSync(master);
+  }
+
+} catch {
+  // Ignore
+}
 
 // =====================================================
-// HTTP HEADERS FOR SOURCE SERVER
+// SOURCE HTTP HEADERS
 // =====================================================
 
 const HTTP_HEADERS =
@@ -186,424 +182,23 @@ const HTTP_HEADERS =
   `Cookie: ${config.cookie}\r\n`;
 
 // =====================================================
-// HTTP SERVER
-// =====================================================
-
-const MIME_TYPES = {
-  ".m3u8":
-    "application/vnd.apple.mpegurl",
-
-  ".m4s":
-    "video/iso.segment",
-
-  ".mp4":
-    "video/mp4",
-
-  ".ts":
-    "video/mp2t",
-};
-
-function sendError(
-  res,
-  status,
-  message
-) {
-  if (!res.headersSent) {
-    res.writeHead(status, {
-      "Content-Type":
-        "text/plain; charset=utf-8",
-      "Cache-Control":
-        "no-store",
-    });
-  }
-
-  res.end(message);
-}
-
-const server =
-  http.createServer(
-    (req, res) => {
-
-      // -----------------------------------------------
-      // CORS / OPTIONS
-      // -----------------------------------------------
-
-      if (
-        req.method === "OPTIONS"
-      ) {
-        res.writeHead(204, {
-          "Access-Control-Allow-Origin":
-            "*",
-
-          "Access-Control-Allow-Methods":
-            "GET,HEAD,OPTIONS",
-
-          "Access-Control-Allow-Headers":
-            "*",
-
-          "Access-Control-Max-Age":
-            "86400",
-        });
-
-        res.end();
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // GET / HEAD ONLY
-      // -----------------------------------------------
-
-      if (
-        req.method !== "GET" &&
-        req.method !== "HEAD"
-      ) {
-        sendError(
-          res,
-          405,
-          "Method Not Allowed"
-        );
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // PARSE URL
-      // -----------------------------------------------
-
-      let pathname;
-
-      try {
-        pathname =
-          decodeURIComponent(
-            new URL(
-              req.url,
-              `http://${req.headers.host}`
-            ).pathname
-          );
-      } catch {
-        sendError(
-          res,
-          400,
-          "Bad request"
-        );
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // MASTER PLAYLIST
-      //
-      // /teststream.m3u8
-      // -----------------------------------------------
-
-      let filePath;
-
-      if (
-        pathname ===
-        "/teststream.m3u8"
-      ) {
-        filePath =
-          path.join(
-            OUTPUT_ROOT,
-            "teststream.m3u8"
-          );
-      }
-
-      // -----------------------------------------------
-      // QUALITY PLAYLISTS
-      //
-      // /240p/index.m3u8
-      // /360p/index.m3u8
-      // etc.
-      // -----------------------------------------------
-
-      else if (
-        pathname.startsWith(
-          "/240p/"
-        ) ||
-        pathname.startsWith(
-          "/360p/"
-        ) ||
-        pathname.startsWith(
-          "/720p/"
-        ) ||
-        pathname.startsWith(
-          "/1080p/"
-        )
-      ) {
-
-        const relative =
-          pathname.replace(
-            /^\/+/,
-            ""
-          );
-
-        const parts =
-          relative.split("/");
-
-        if (parts.length !== 2) {
-          sendError(
-            res,
-            400,
-            "Invalid path"
-          );
-
-          return;
-        }
-
-        const quality =
-          parts[0];
-
-        const filename =
-          parts[1];
-
-        if (
-          !requiredQualities.includes(
-            quality
-          )
-        ) {
-          sendError(
-            res,
-            404,
-            "Not found"
-          );
-
-          return;
-        }
-
-        if (
-          filename.includes("..") ||
-          filename.includes("/") ||
-          filename.includes("\\")
-        ) {
-          sendError(
-            res,
-            400,
-            "Invalid path"
-          );
-
-          return;
-        }
-
-        filePath =
-          path.join(
-            OUTPUT_ROOT,
-            quality,
-            filename
-          );
-      }
-
-      // -----------------------------------------------
-      // UNKNOWN PATH
-      // -----------------------------------------------
-
-      else {
-        sendError(
-          res,
-          404,
-          "Not found"
-        );
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // SECURITY CHECK
-      // -----------------------------------------------
-
-      const resolvedOutput =
-        path.resolve(
-          OUTPUT_ROOT
-        );
-
-      const resolvedFile =
-        path.resolve(
-          filePath
-        );
-
-      if (
-        !resolvedFile.startsWith(
-          resolvedOutput +
-            path.sep
-        ) &&
-        resolvedFile !==
-          resolvedOutput
-      ) {
-        sendError(
-          res,
-          403,
-          "Forbidden"
-        );
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // FILE EXISTS?
-      // -----------------------------------------------
-
-      if (
-        !fs.existsSync(
-          resolvedFile
-        )
-      ) {
-        sendError(
-          res,
-          404,
-          "Stream segment not ready"
-        );
-
-        return;
-      }
-
-      let stat;
-
-      try {
-        stat =
-          fs.statSync(
-            resolvedFile
-          );
-      } catch {
-        sendError(
-          res,
-          404,
-          "Not found"
-        );
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // MIME TYPE
-      // -----------------------------------------------
-
-      const ext =
-        path.extname(
-          resolvedFile
-        ).toLowerCase();
-
-      const contentType =
-        MIME_TYPES[ext] ||
-        "application/octet-stream";
-
-      // -----------------------------------------------
-      // CACHE POLICY
-      // -----------------------------------------------
-
-      let cacheControl;
-
-      if (
-        ext === ".m3u8"
-      ) {
-        cacheControl =
-          "no-cache, no-store, must-revalidate";
-      } else {
-        cacheControl =
-          "public, max-age=3600, immutable";
-      }
-
-      // -----------------------------------------------
-      // RESPONSE HEADERS
-      // -----------------------------------------------
-
-      const headers = {
-        "Content-Type":
-          contentType,
-
-        "Content-Length":
-          stat.size,
-
-        "Cache-Control":
-          cacheControl,
-
-        "Access-Control-Allow-Origin":
-          "*",
-
-        "Access-Control-Allow-Methods":
-          "GET,HEAD,OPTIONS",
-
-        "Access-Control-Allow-Headers":
-          "*",
-
-        "Accept-Ranges":
-          "bytes",
-      };
-
-      // -----------------------------------------------
-      // HEAD
-      // -----------------------------------------------
-
-      if (
-        req.method === "HEAD"
-      ) {
-        res.writeHead(
-          200,
-          headers
-        );
-
-        res.end();
-
-        return;
-      }
-
-      // -----------------------------------------------
-      // STREAM FILE
-      // -----------------------------------------------
-
-      res.writeHead(
-        200,
-        headers
-      );
-
-      const stream =
-        fs.createReadStream(
-          resolvedFile
-        );
-
-      stream.pipe(res);
-
-      stream.on(
-        "error",
-        (error) => {
-          console.error(
-            "File stream error:",
-            error.message
-          );
-
-          if (
-            !res.headersSent
-          ) {
-            res.writeHead(
-              500
-            );
-          }
-
-          res.end();
-        }
-      );
-    }
-  );
-
-// =====================================================
 // FFMPEG ARGUMENTS
+// =====================================================
+//
+// Only 3 upstream connections:
+//
+// 360p
+// 720p
+// audio
+//
+// Video is copied without re-encoding.
+// This keeps CPU usage low.
 // =====================================================
 
 const ffmpegArgs = [
 
   // ===================================================
-  // 240p INPUT
-  // ===================================================
-
-  "-headers",
-  HTTP_HEADERS,
-
-  "-i",
-  SOURCES["240p"],
-
-
-  // ===================================================
-  // 360p INPUT
+  // 360P
   // ===================================================
 
   "-headers",
@@ -612,9 +207,8 @@ const ffmpegArgs = [
   "-i",
   SOURCES["360p"],
 
-
   // ===================================================
-  // 720p INPUT
+  // 720P
   // ===================================================
 
   "-headers",
@@ -623,20 +217,8 @@ const ffmpegArgs = [
   "-i",
   SOURCES["720p"],
 
-
   // ===================================================
-  // 1080p INPUT
-  // ===================================================
-
-  "-headers",
-  HTTP_HEADERS,
-
-  "-i",
-  SOURCES["1080p"],
-
-
-  // ===================================================
-  // SHARED AUDIO INPUT
+  // AUDIO
   // ===================================================
 
   "-headers",
@@ -645,46 +227,32 @@ const ffmpegArgs = [
   "-i",
   SOURCES["audio"],
 
-
   // ===================================================
-  // VIDEO + AUDIO MAPPING
+  // MAP 360P
   // ===================================================
 
   "-map",
   "0:v:0",
 
   "-map",
-  "4:a:0",
+  "2:a:0",
+
+  // ===================================================
+  // MAP 720P
+  // ===================================================
 
   "-map",
   "1:v:0",
 
   "-map",
-  "4:a:0",
-
-  "-map",
-  "2:v:0",
-
-  "-map",
-  "4:a:0",
-
-  "-map",
-  "3:v:0",
-
-  "-map",
-  "4:a:0",
-
+  "2:a:0",
 
   // ===================================================
   // VIDEO
   // ===================================================
 
-  // All source videos are already encoded.
-  // Do not re-encode them.
-
   "-c:v",
   "copy",
-
 
   // ===================================================
   // AUDIO
@@ -699,7 +267,6 @@ const ffmpegArgs = [
   "-ar",
   "48000",
 
-
   // ===================================================
   // HLS
   // ===================================================
@@ -710,15 +277,22 @@ const ffmpegArgs = [
   "-hls_segment_type",
   "fmp4",
 
+  // 2 second segments reduce latency.
   "-hls_time",
-  "4",
+  "2",
 
+  // Keep 6 segments.
+  // ~12 seconds of playlist.
   "-hls_list_size",
-  "8",
+  "6",
+
+  // Keep a couple of old segments around.
+  // This helps slower clients avoid 404s.
+  "-hls_delete_threshold",
+  "2",
 
   "-hls_flags",
   "delete_segments+append_list+independent_segments",
-
 
   // ===================================================
   // MASTER PLAYLIST
@@ -727,67 +301,55 @@ const ffmpegArgs = [
   "-master_pl_name",
   "teststream.m3u8",
 
-
   // ===================================================
   // VARIANT STREAMS
   // ===================================================
 
   "-var_stream_map",
-  "v:0,a:0,name:240p " +
-  "v:1,a:1,name:360p " +
-  "v:2,a:2,name:720p " +
-  "v:3,a:3,name:1080p",
-
+  "v:0,a:0,name:360p " +
+  "v:1,a:1,name:720p",
 
   // ===================================================
-  // INIT SEGMENTS
+  // FMP4 INIT FILES
   // ===================================================
 
   "-hls_fmp4_init_filename",
   "init.mp4",
 
-
   // ===================================================
-  // SEGMENTS
+  // SEGMENT FILES
   // ===================================================
 
   "-hls_segment_filename",
   path.join(
-    OUTPUT_ROOT,
+    OUTPUT_DIR,
     "%v",
     "segment-%06d.m4s"
   ),
 
-
   // ===================================================
-  // PLAYLISTS
+  // VARIANT PLAYLISTS
   // ===================================================
 
   path.join(
-    OUTPUT_ROOT,
+    OUTPUT_DIR,
     "%v",
     "index.m3u8"
-  ),
+  )
 ];
 
 // =====================================================
-// START FFMPEG
+// LOG
 // =====================================================
 
 console.log("");
 console.log("========================================");
-console.log("      HLS MULTI-QUALITY RESTREAM");
+console.log("       HLS RESTREAM - PRODUCTION");
 console.log("========================================");
 console.log("");
 
 console.log(
   `FFmpeg: ${FFMPEG}`
-);
-
-console.log("");
-
-console.log(
-  "240p  -> source 240p"
 );
 
 console.log(
@@ -799,37 +361,50 @@ console.log(
 );
 
 console.log(
-  "1080p -> source 1080p"
-);
-
-console.log(
   "Audio -> shared audio source"
 );
 
 console.log("");
 
 console.log(
-  `Master HLS: http://localhost:${PORT}/teststream.m3u8`
+  "Video: COPY (no transcoding)"
+);
+
+console.log(
+  "HLS: 2 second segments"
+);
+
+console.log(
+  "Playlist: 6 segments"
 );
 
 console.log("");
+
+console.log(
+  `Master: http://127.0.0.1:${PORT}/teststream.m3u8`
+);
+
+console.log("");
+
+// =====================================================
+// START FFMPEG
+// =====================================================
 
 let ffmpeg;
 
 try {
 
-  ffmpeg =
-    spawn(
-      FFMPEG,
-      ffmpegArgs,
-      {
-        stdio: [
-          "ignore",
-          "ignore",
-          "pipe",
-        ],
-      }
-    );
+  ffmpeg = spawn(
+    FFMPEG,
+    ffmpegArgs,
+    {
+      stdio: [
+        "ignore",
+        "ignore",
+        "pipe"
+      ]
+    }
+  );
 
 } catch (error) {
 
@@ -837,12 +412,24 @@ try {
     "Failed to start FFmpeg:"
   );
 
-  console.error(
-    error
-  );
+  console.error(error);
 
   process.exit(1);
 }
+
+// =====================================================
+// FFMPEG STDERR
+// =====================================================
+
+ffmpeg.stderr.on(
+  "data",
+  (data) => {
+
+    process.stderr.write(
+      data.toString()
+    );
+  }
+);
 
 // =====================================================
 // FFMPEG ERROR
@@ -856,11 +443,9 @@ ffmpeg.on(
     console.error(
       "========================================"
     );
-
     console.error(
-      "FFmpeg failed"
+      "FFMPEG ERROR"
     );
-
     console.error(
       "========================================"
     );
@@ -869,24 +454,6 @@ ffmpeg.on(
       error
     );
 
-    console.error("");
-  }
-);
-
-// =====================================================
-// FFMPEG LOG
-// =====================================================
-
-ffmpeg.stderr.on(
-  "data",
-  (data) => {
-
-    const message =
-      data.toString();
-
-    process.stderr.write(
-      message
-    );
   }
 );
 
@@ -899,6 +466,7 @@ ffmpeg.on(
   (code, signal) => {
 
     console.log("");
+
     console.log(
       "========================================"
     );
@@ -915,83 +483,12 @@ ffmpeg.on(
 );
 
 // =====================================================
-// SERVER ERROR
-// =====================================================
-
-server.on(
-  "error",
-  (error) => {
-
-    if (
-      error.code ===
-      "EADDRINUSE"
-    ) {
-
-      console.error(
-        `ERROR: Port ${PORT} is already in use.`
-      );
-
-      console.error(
-        `Run: sudo lsof -i :${PORT}`
-      );
-
-      console.error(
-        `Then stop the old process.`
-      );
-
-    } else {
-
-      console.error(
-        "HTTP server error:",
-        error
-      );
-    }
-
-    if (
-      ffmpeg &&
-      !ffmpeg.killed
-    ) {
-      ffmpeg.kill(
-        "SIGTERM"
-      );
-    }
-
-    process.exit(1);
-  }
-);
-
-// =====================================================
-// START HTTP SERVER
-// =====================================================
-
-server.listen(
-  PORT,
-  "127.0.0.1",
-  () => {
-
-    console.log(
-      `HTTP server listening on :${PORT}`
-    );
-
-    console.log("");
-
-    console.log(
-      `Master HLS: http://localhost:${PORT}/teststream.m3u8`
-    );
-
-    console.log("");
-  }
-);
-
-// =====================================================
-// GRACEFUL SHUTDOWN
+// SHUTDOWN
 // =====================================================
 
 let shuttingDown = false;
 
-function shutdown(
-  signal
-) {
+function shutdown(signal) {
 
   if (shuttingDown) {
     return;
@@ -1001,10 +498,13 @@ function shutdown(
 
   console.log("");
   console.log(
-    `Received ${signal}. Stopping...`
+    `Received ${signal}`
   );
 
-  // Stop FFmpeg first.
+  console.log(
+    "Stopping FFmpeg..."
+  );
+
   if (
     ffmpeg &&
     !ffmpeg.killed
@@ -1021,6 +521,7 @@ function shutdown(
           ffmpeg &&
           !ffmpeg.killed
         ) {
+
           ffmpeg.kill(
             "SIGKILL"
           );
@@ -1031,24 +532,11 @@ function shutdown(
     );
   }
 
-  // Stop HTTP server.
-  server.close(
-    () => {
-
-      console.log(
-        "HTTP server stopped."
-      );
-
-      process.exit(0);
-    }
-  );
-
-  // Don't wait forever.
   setTimeout(
     () => {
       process.exit(0);
     },
-    7000
+    6000
   );
 }
 

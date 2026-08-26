@@ -1,6 +1,6 @@
 {
   "port": 4060,
-  "ffmpegPath": "ffmpeg",
+  "ffmpegPath": "/usr/bin/ffmpeg",
 
   "headers": {
     "origin": "https://adarash.com",
