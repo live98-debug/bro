@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { spawn } from "node:child_process";
 
 // =====================================================
 // CONFIG
@@ -15,109 +15,146 @@ const FFMPEG_PATH =
 const OUTPUT_DIR =
   path.resolve("./outputs");
 
+const CONFIG_FILE =
+  path.resolve("./stream-config.json");
+
+
 // =====================================================
-// SOURCE HLS
+// LOAD STREAM CONFIG
+// =====================================================
+
+function loadConfig() {
+
+  if (!fs.existsSync(CONFIG_FILE)) {
+
+    console.error(
+      `ERROR: Missing ${CONFIG_FILE}`
+    );
+
+    process.exit(1);
+  }
+
+  let config;
+
+  try {
+
+    config = JSON.parse(
+      fs.readFileSync(
+        CONFIG_FILE,
+        "utf8"
+      )
+    );
+
+  } catch (error) {
+
+    console.error(
+      "ERROR: Cannot read stream-config.json"
+    );
+
+    console.error(
+      error.message
+    );
+
+    process.exit(1);
+  }
+
+
+  const required = [
+    "video240p",
+    "video360p",
+    "video720p",
+    "video1080p",
+    "audio",
+    "cookie"
+  ];
+
+
+  for (const key of required) {
+
+    if (
+      !config[key] ||
+      typeof config[key] !== "string"
+    ) {
+
+      console.error(
+        `ERROR: Missing config field: ${key}`
+      );
+
+      process.exit(1);
+    }
+  }
+
+
+  return config;
+}
+
+
+const config =
+  loadConfig();
+
+
+// =====================================================
+// SOURCE URLs
 // =====================================================
 
 const SOURCE_240P =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-240p/index-1.m3u8";
+  config.video240p;
 
 const SOURCE_360P =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-360p/index-1.m3u8";
+  config.video360p;
 
 const SOURCE_720P =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-720p/index-1.m3u8";
+  config.video720p;
 
 const SOURCE_1080P =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-1080p/index-1.m3u8";
+  config.video1080p;
 
 const SOURCE_AUDIO =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-audio/index-1.m3u8";
+  config.audio;
+
 
 // =====================================================
 // COOKIE
 // =====================================================
 //
-// Set this when starting the application:
+// stream-config.json can contain:
 //
-// export BROWSER_COOKIE='tt_enable_cookie=...; Cloud-CDN-Cookie=...'
+// "cookie": "Cloud-CDN-Cookie=abc..."
 //
-// We extract only Cloud-CDN-Cookie below.
+// or:
+//
+// "cookie": "abc..."
+//
+// Both are supported.
 // =====================================================
 
-const BROWSER_COOKIE =
-  process.env.BROWSER_COOKIE || "";
-
-if (!BROWSER_COOKIE) {
-  console.error(
-    "ERROR: BROWSER_COOKIE environment variable is missing."
+const cloudCdnCookie =
+  config.cookie.replace(
+    /^Cloud-CDN-Cookie=/,
+    ""
   );
 
-  process.exit(1);
-}
-
 
 // =====================================================
-// EXTRACT CLOUD CDN COOKIE
-// =====================================================
-
-function extractCloudCookie(cookieHeader) {
-
-  const match = cookieHeader.match(
-    /(?:^|;\s*)Cloud-CDN-Cookie=([^;]+)/
-  );
-
-  if (!match) {
-    throw new Error(
-      "Cloud-CDN-Cookie was not found in BROWSER_COOKIE"
-    );
-  }
-
-  return match[1];
-}
-
-let cloudCdnCookie;
-
-try {
-
-  cloudCdnCookie =
-    extractCloudCookie(
-      BROWSER_COOKIE
-    );
-
-} catch (error) {
-
-  console.error(
-    "Cookie error:",
-    error.message
-  );
-
-  process.exit(1);
-}
-
-
-// =====================================================
-// CREATE OUTPUT DIRECTORY
+// CREATE OUTPUT DIRECTORIES
 // =====================================================
 
 fs.mkdirSync(
   OUTPUT_DIR,
   {
-    recursive: true,
+    recursive: true
   }
 );
 
 
-// =====================================================
-// CREATE VARIANT DIRECTORIES
-// =====================================================
-
-for (const quality of [
-  "240p",
-  "360p",
-  "720p",
-  "1080p",
-]) {
+for (
+  const quality of [
+    "240p",
+    "360p",
+    "720p",
+    "1080p"
+  ]
+) {
 
   fs.mkdirSync(
     path.join(
@@ -125,10 +162,9 @@ for (const quality of [
       quality
     ),
     {
-      recursive: true,
+      recursive: true
     }
   );
-
 }
 
 
@@ -148,7 +184,7 @@ const MIME_TYPES = {
     "video/mp4",
 
   ".ts":
-    "video/mp2t",
+    "video/mp2t"
 
 };
 
@@ -162,7 +198,7 @@ const server =
     (req, res) => {
 
       // =================================================
-      // CORS / OPTIONS
+      // CORS PREFLIGHT
       // =================================================
 
       if (
@@ -172,14 +208,10 @@ const server =
         res.writeHead(
           204,
           {
-            "Access-Control-Allow-Origin":
-              "*",
-
+            "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods":
               "GET,HEAD,OPTIONS",
-
-            "Access-Control-Allow-Headers":
-              "*",
+            "Access-Control-Allow-Headers": "*"
           }
         );
 
@@ -190,7 +222,7 @@ const server =
 
 
       // =================================================
-      // ONLY GET / HEAD
+      // GET / HEAD ONLY
       // =================================================
 
       if (
@@ -241,10 +273,10 @@ const server =
 
 
       // =================================================
-      // REMOVE LEADING SLASH
+      // REMOVE LEADING /
       // =================================================
 
-      let relativePath =
+      const relativePath =
         pathname.replace(
           /^\/+/,
           ""
@@ -252,17 +284,17 @@ const server =
 
 
       // =================================================
-      // ONLY SERVE HLS FILES
+      // ONLY HLS FILES
       // =================================================
 
-      const ext =
+      const extension =
         path.extname(
           relativePath
         ).toLowerCase();
 
 
       if (
-        !MIME_TYPES[ext]
+        !MIME_TYPES[extension]
       ) {
 
         res.writeHead(
@@ -278,7 +310,7 @@ const server =
 
 
       // =================================================
-      // PATH SECURITY
+      // PATH TRAVERSAL PROTECTION
       // =================================================
 
       if (
@@ -300,7 +332,7 @@ const server =
 
 
       // =================================================
-      // RESOLVE PATH
+      // RESOLVE FILE
       // =================================================
 
       const filePath =
@@ -310,12 +342,7 @@ const server =
         );
 
 
-      // =================================================
-      // PREVENT PATH TRAVERSAL
-      // =================================================
-
       if (
-        filePath !== OUTPUT_DIR &&
         !filePath.startsWith(
           OUTPUT_DIR + path.sep
         )
@@ -334,7 +361,7 @@ const server =
 
 
       // =================================================
-      // FILE EXISTS
+      // CHECK FILE
       // =================================================
 
       if (
@@ -347,7 +374,7 @@ const server =
           404,
           {
             "Cache-Control":
-              "no-store",
+              "no-store"
           }
         );
 
@@ -358,10 +385,6 @@ const server =
         return;
       }
 
-
-      // =================================================
-      // STAT
-      // =================================================
 
       let stat;
 
@@ -391,7 +414,8 @@ const server =
       // =================================================
 
       const isPlaylist =
-        ext === ".m3u8";
+        extension === ".m3u8";
+
 
       const cacheControl =
         isPlaylist
@@ -402,13 +426,13 @@ const server =
 
 
       // =================================================
-      // HEADERS
+      // RESPONSE HEADERS
       // =================================================
 
       const headers = {
 
         "Content-Type":
-          MIME_TYPES[ext],
+          MIME_TYPES[extension],
 
         "Content-Length":
           stat.size,
@@ -426,13 +450,13 @@ const server =
           "*",
 
         "Accept-Ranges":
-          "bytes",
+          "bytes"
 
       };
 
 
       // =================================================
-      // RESPONSE
+      // SEND HEADERS
       // =================================================
 
       res.writeHead(
@@ -459,18 +483,18 @@ const server =
       // STREAM FILE
       // =================================================
 
-      const stream =
+      const fileStream =
         fs.createReadStream(
           filePath
         );
 
 
-      stream.pipe(
+      fileStream.pipe(
         res
       );
 
 
-      stream.on(
+      fileStream.on(
         "error",
         (error) => {
 
@@ -499,7 +523,7 @@ const server =
 
 
 // =====================================================
-// FFMPEG HEADERS
+// UPSTREAM HTTP HEADERS
 // =====================================================
 
 const HTTP_HEADERS =
@@ -509,13 +533,13 @@ const HTTP_HEADERS =
 
 
 // =====================================================
-// FFMPEG
+// FFMPEG ARGUMENTS
 // =====================================================
 
 const ffmpegArgs = [
 
   // ===================================================
-  // 240P INPUT
+  // 240P
   // ===================================================
 
   "-headers",
@@ -526,7 +550,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 360P INPUT
+  // 360P
   // ===================================================
 
   "-headers",
@@ -537,7 +561,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 720P INPUT
+  // 720P
   // ===================================================
 
   "-headers",
@@ -548,7 +572,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 1080P INPUT
+  // 1080P
   // ===================================================
 
   "-headers",
@@ -559,7 +583,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // AUDIO INPUT
+  // SHARED AUDIO
   // ===================================================
 
   "-headers",
@@ -570,7 +594,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 240P
+  // MAP 240P + AUDIO
   // ===================================================
 
   "-map",
@@ -581,7 +605,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 360P
+  // MAP 360P + AUDIO
   // ===================================================
 
   "-map",
@@ -592,7 +616,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 720P
+  // MAP 720P + AUDIO
   // ===================================================
 
   "-map",
@@ -603,7 +627,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // 1080P
+  // MAP 1080P + AUDIO
   // ===================================================
 
   "-map",
@@ -616,6 +640,9 @@ const ffmpegArgs = [
   // ===================================================
   // VIDEO
   // ===================================================
+
+  // Source video is already encoded.
+  // Copying avoids CPU-heavy re-encoding.
 
   "-c:v",
   "copy",
@@ -664,10 +691,11 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // VARIANT STREAMS
+  // VARIANT STREAM MAP
   // ===================================================
 
   "-var_stream_map",
+
   "v:0,a:0,name:240p " +
   "v:1,a:1,name:360p " +
   "v:2,a:2,name:720p " +
@@ -675,7 +703,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // INIT FILE
+  // INIT FILES
   // ===================================================
 
   "-hls_fmp4_init_filename",
@@ -683,7 +711,7 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // SEGMENT FILES
+  // SEGMENTS
   // ===================================================
 
   "-hls_segment_filename",
@@ -696,23 +724,24 @@ const ffmpegArgs = [
 
 
   // ===================================================
-  // VARIANT PLAYLISTS
+  // VARIANT PLAYLIST
   // ===================================================
 
   path.join(
     OUTPUT_DIR,
     "%v",
     "index.m3u8"
-  ),
+  )
 
 ];
 
 
 // =====================================================
-// START FFMPEG
+// START MESSAGE
 // =====================================================
 
 console.log("");
+
 console.log(
   "========================================"
 );
@@ -763,7 +792,7 @@ console.log("");
 
 
 // =====================================================
-// SPAWN
+// START FFMPEG
 // =====================================================
 
 const ffmpeg =
@@ -774,25 +803,22 @@ const ffmpeg =
       stdio: [
         "ignore",
         "ignore",
-        "pipe",
-      ],
+        "pipe"
+      ]
     }
   );
 
 
 // =====================================================
-// FFMPEG LOGGING
+// FFMPEG STDERR
 // =====================================================
 
 ffmpeg.stderr.on(
   "data",
   (data) => {
 
-    const message =
-      data.toString();
-
     process.stderr.write(
-      message
+      data.toString()
     );
 
   }
@@ -824,8 +850,6 @@ ffmpeg.on(
     console.error(
       error
     );
-
-    console.error("");
 
   }
 );
@@ -878,9 +902,7 @@ server.listen(
 // SHUTDOWN
 // =====================================================
 
-function shutdown(
-  signal
-) {
+function shutdown(signal) {
 
   console.log("");
 
