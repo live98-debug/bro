@@ -5,7 +5,7 @@ import http from "node:http";
 
 const PORT = 3000;
 
-const OUTPUT_DIR = path.resolve("./output");
+const OUTPUT_DIR = path.resolve("./outputs");
 
 // =====================================================
 // SOURCE URLS
