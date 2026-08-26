@@ -4,7 +4,7 @@ import { URL } from "node:url";
 
 const PORT = 4060;
 
-const SOURCE = "https://edge.novastream.et/liveplay/kynlMlVdlEvsqvbzYjXffYS2kYoO14ZOLPEz0eY-MrA/1787773231/3600/d0019c9d-5088-47a2-bb9a-ec5fff5b9b4a/etvn.m3u8";
+const SOURCE = "https://edge.novastream.et/liveplay/43slLuTrhQRFkWzXA8o7D1Fre5ZOeryAxsvXsICGvPY/1787777223/3600/d0019c9d-5088-47a2-bb9a-ec5fff5b9b4a/abbay.m3u8";
 
 const server = http.createServer(async (req, res) => {
   // CORS
