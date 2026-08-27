@@ -1240,7 +1240,7 @@ import { URL, fileURLToPath } from "node:url";
 const PORT = 4060;
 
 // Your source HLS
-const SOURCE = "https://stream.marzi/index.m3u8";
+const SOURCE = "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-1080p/index-1.m3u8";
 
 // Cookie required by the source HLS server.
 // Put the complete Cookie header value here.
