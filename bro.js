@@ -1242,7 +1242,7 @@ const PORT = 4060;
 
 // Separate HLS sources
 const VIDEO_SOURCE =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-1080p/index-1.m3u8";
+  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-720p/index-1.m3u8";
 
 const AUDIO_SOURCE =
   "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-audio/index-1.m3u8";
