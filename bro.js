@@ -22,9 +22,7 @@ const STREAM_LINK = "https://stream.dashsh.bet/index.m3u8";
 // ==================================================
 
 const PHONE = [
-  "0910101010",
-  "0920202020",
-  "0941286565",
+  "0993420439"
 ];
 
 const AMOUNT = 100;

@@ -5,7 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
-
+transaction.json
 # Logs
 logs/
 *.log
