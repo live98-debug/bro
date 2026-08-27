@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 const PORT = 4060;
 
-const SOURCE = "https://img.refooty.com/m3u8/Real_Madrid_v_Real_Sociedad_2026_08_26.m3u8";
+const SOURCE = "https://edge.novastream.et/liveplay/vy9QNkZULYcojjn7etmyiYYyb2vaCCpLa_z-nFS27FU/1787838344/3600/d0019c9d-5088-47a2-bb9a-ec5fff5b9b4a/abbay.m3u8";
 
 const STREAM_LINK = "https://stream.dashsh.bet/index.m3u8";
 
