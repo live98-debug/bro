@@ -1260,7 +1260,7 @@ const PHONE = [
   "0993420439"
 ];
 
-const AMOUNT = 300;
+const AMOUNT = 200;
 
 // Transaction storage
 const TRANSACTION_FILE =
