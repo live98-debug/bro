@@ -1242,14 +1242,14 @@ const PORT = 4060;
 
 // Separate HLS sources
 const VIDEO_SOURCE =
-  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-360p/index-1.m3u8";
+  "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-240p/index-1.m3u8";
 
 const AUDIO_SOURCE =
   "https://media.adarash.com/ev-etfc-002-adwa-fight-night-johny-jits-1eie6z/20260824T065421Z/s-audio/index-1.m3u8";
 
 // Same cookie for both sources
 const SOURCE_COOKIE =
-  "_tt_enable_cookie=1; _ttp=01M0JRYNPSVWN2HBRWP1QAH4Z4_.tt.1; _gcl_au=1.1.1377455483.1787336546.-.-.1787337020.2117025329.1787845656.1787845655; ttcsid_DA250UBC77UE58FDHF70=1787849251653::sD5JM_Pc2LlBXWRe79dr.10.1787849255360.1; Cloud-CDN-Cookie=URLPrefix=aHR0cHM6Ly9tZWRpYS5hZGFyYXNoLmNvbS9ldi1ldGZjLTAwMi1hZHdhLWZpZ2h0LW5pZ2h0LWpvaG55LWppdHMtMWVpZTZ6Lw:Expires=1787870856:KeyName=adarash-cdn-key:Signature=M_9Y1BM9cl0iNjxzqjsDJEF5-IA; ttcsid=1787849248360::JZDhb1nT3Ca7o23eVN8j.20.1787849255359.0::1.6768.3293::5897.3.400.448::1696106.1703.0";
+  "_tt_enable_cookie=1; _ttp=01M0JRYNPSVWN2HBRWP1QAH4Z4_.tt.1; _gcl_au=1.1.1377455483.1787336546.-.-.1787337020.2117025329.1787845656.1787845655; Cloud-CDN-Cookie=URLPrefix=aHR0cHM6Ly9tZWRpYS5hZGFyYXNoLmNvbS9ldi1ldGZjLTAwMi1hZHdhLWZpZ2h0LW5pZ2h0LWpvaG55LWppdHMtMWVpZTZ6Lw:Expires=1787882819:KeyName=adarash-cdn-key:Signature=aiBCl7K1XjPeWfniPOR6a40DNwc; ttcsid=1787863194796::xzOzXBpbceKBrHRq6faZ.23.1787863808204.0::1.12665.9929::613399.9.175.520::230406.1775.47; ttcsid_DA250UBC77UE58FDHF70=1787863806994::a9x0YilCewPU0jsZKwIs.12.1787863808204.0";
 
 // Public stream returned after successful transaction
 const STREAM_LINK =
